@@ -1,0 +1,14 @@
+{
+  "name": "ai-news-line",
+  "version": "1.0.0",
+  "description": "毎朝AIニュースをLINEに通知するツール",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.37.0",
+    "openai": "^4.0.0",
+    "rss-parser": "^3.13.0"
+  }
+}

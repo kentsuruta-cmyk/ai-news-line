@@ -1,0 +1,29 @@
+name: Daily AI News
+
+on:
+  schedule:
+    - cron: '0 20 * * *'  # 毎日 5:00 JST (= 20:00 UTC)
+  workflow_dispatch:       # GitHub画面から手動実行も可能
+
+jobs:
+  send-news:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Send AI news to LINE
+        run: node src/index.js
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
