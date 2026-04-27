@@ -3,19 +3,34 @@
 const Parser = require('rss-parser');
 const https = require('https');
 
+// 国別の最大件数（Claude送信前の候補数）
+const COUNTRY_LIMITS = {
+  '🇺🇸 US': 8,
+  '🇨🇳 CN': 8,
+  '🇬🇧 UK': 5,
+  '🇩🇪 DE': 3,
+};
+
 const RSS_FEEDS = [
-  { url: 'https://techcrunch.com/category/artificial-intelligence/feed/', country: '🇺🇸 US' },
-  { url: 'https://venturebeat.com/category/ai/feed/', country: '🇺🇸 US' },
-  { url: 'https://www.theguardian.com/technology/artificialintelligenceai/rss', country: '🇬🇧 UK' },
-  { url: 'https://rss.dw.com/rdf/rss-en-tech', country: '🇩🇪 DE' },
-  { url: 'https://www.scmp.com/rss/5/feed', country: '🇨🇳 CN' },
+  { url: 'https://techcrunch.com/category/artificial-intelligence/feed/', country: '🇺🇸 US', lang: 'en' },
+  { url: 'https://venturebeat.com/category/ai/feed/', country: '🇺🇸 US', lang: 'en' },
+  { url: 'https://www.theguardian.com/technology/artificialintelligenceai/rss', country: '🇬🇧 UK', lang: 'en' },
+  { url: 'https://rss.dw.com/rdf/rss-en-tech', country: '🇩🇪 DE', lang: 'en' },
+  { url: 'https://36kr.com/feed', country: '🇨🇳 CN', lang: 'zh' },
+  { url: 'https://www.huxiu.com/rss/0.rss', country: '🇨🇳 CN', lang: 'zh' },
 ];
 
-const AI_KEYWORDS = [
+const AI_KEYWORDS_EN = [
   'ai', 'artificial intelligence', 'machine learning', 'llm', 'gpt', 'claude',
   'gemini', 'neural', 'deep learning', 'openai', 'anthropic', 'deepmind',
-  'chatgpt', 'robotics', 'automation', 'large language model', 'generative ai',
-  'mistral', 'meta ai', 'foundation model',
+  'chatgpt', 'large language model', 'generative', 'mistral', 'foundation model',
+  'transformer', 'diffusion model', 'robotics', 'automation',
+];
+
+const AI_KEYWORDS_ZH = [
+  'ai', '人工智能', '机器学习', '大模型', '生成式', '神经网络', 'openai',
+  'chatgpt', '自动化', '大语言', '智能体', '语言模型', 'deepseek', 'llm',
+  '算法', '训练', '推理', '科技', '智能', '机器人',
 ];
 
 async function fetchAllNews() {
@@ -25,12 +40,13 @@ async function fetchAllNews() {
   for (const feed of RSS_FEEDS) {
     try {
       const result = await parser.parseURL(feed.url);
-      for (const item of (result.items || []).slice(0, 20)) {
+      for (const item of (result.items || []).slice(0, 30)) {
         allItems.push({
           title: (item.title || '').trim(),
           link: item.link || '',
           pubDate: item.pubDate ? new Date(item.pubDate) : new Date(0),
           country: feed.country,
+          lang: feed.lang,
           snippet: (item.contentSnippet || item.summary || '').slice(0, 400),
         });
       }
@@ -43,24 +59,38 @@ async function fetchAllNews() {
   return allItems;
 }
 
-function filterAINews(items) {
+function selectCandidates(items) {
   const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
 
+  // 48時間以内 + 言語別AIキーワードで粗フィルタ
   const filtered = items.filter(item => {
     if (item.pubDate < cutoff) return false;
     const text = `${item.title} ${item.snippet}`.toLowerCase();
-    return AI_KEYWORDS.some(kw => text.includes(kw));
+    const keywords = item.lang === 'zh' ? AI_KEYWORDS_ZH : AI_KEYWORDS_EN;
+    return keywords.some(kw => text.includes(kw));
   });
 
+  // 新着順
   filtered.sort((a, b) => b.pubDate - a.pubDate);
 
+  // タイトル重複除去
   const seen = new Set();
-  return filtered.filter(item => {
-    const key = item.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 30);
+  const deduped = filtered.filter(item => {
+    const key = item.title.replace(/\s+/g, '').slice(0, 20);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, 20);
+  });
+
+  // 国別上限を適用してClaude用の候補を絞る
+  const countPerCountry = {};
+  return deduped.filter(item => {
+    const limit = COUNTRY_LIMITS[item.country] ?? 5;
+    const count = countPerCountry[item.country] ?? 0;
+    if (count >= limit) return false;
+    countPerCountry[item.country] = count + 1;
+    return true;
+  });
 }
 
 async function summarizeNews(items) {
@@ -71,26 +101,31 @@ async function summarizeNews(items) {
     throw new Error('ANTHROPIC_API_KEY または OPENAI_API_KEY を設定してください');
   }
 
-  const newsText = items.map((item, i) =>
-    `[${i + 1}] ${item.country}\nタイトル: ${item.title}\nURL: ${item.link}\n内容: ${item.snippet}`
-  ).join('\n\n');
+  const newsText = items.map((item, i) => {
+    const langNote = item.lang === 'zh' ? '（中国語記事・要翻訳）' : '';
+    return `[${i + 1}] ${item.country}${langNote}\nタイトル: ${item.title}\nURL: ${item.link}\n内容: ${item.snippet}`;
+  }).join('\n\n');
 
-  const prompt = `以下のAIニュース記事を日本語に翻訳・要約してください。
-各記事を1〜2文で簡潔に要約し、以下のJSON配列形式で返してください。
+  const prompt = `以下のAI・テクノロジーニュース記事を評価・要約してください。
 
+【指示】
+1. 各記事のAIテクノロジー関連度を0〜10でスコアリングし、7以上の記事のみを採用する
+2. 「中国語記事・要翻訳」と書かれた記事は中国語から日本語に翻訳してタイトルと要約を作成する
+3. 採用した記事を1〜2文の日本語で簡潔に要約する
+4. スコアが7未満の記事は結果に含めない（件数が減っても構わない）
+
+【返却フォーマット（JSONのみ・コードブロック不要）】
 [
   {
-    "title": "日本語タイトル（簡潔に）",
+    "title": "日本語タイトル",
     "summary": "1〜2文の日本語要約",
     "url": "元のURL",
     "country": "国旗+国名（例: 🇺🇸 US）"
   }
 ]
 
-記事一覧:
-${newsText}
-
-JSONのみを返してください。コードブロック記法は不要です。`;
+【記事一覧】
+${newsText}`;
 
   if (useAnthropic) {
     const Anthropic = require('@anthropic-ai/sdk');
@@ -180,19 +215,24 @@ async function main() {
   const allItems = await fetchAllNews();
   console.log(`   合計 ${allItems.length} 件取得`);
 
-  const filtered = filterAINews(allItems);
-  console.log(`🔍 AIニュース ${filtered.length} 件に絞り込み`);
+  const candidates = selectCandidates(allItems);
+  console.log(`🔍 候補 ${candidates.length} 件（US≤8, CN≤8, UK≤5, DE≤3）`);
 
-  if (filtered.length === 0) {
+  if (candidates.length === 0) {
     console.log('⚠️  対象ニュースが見つかりませんでした');
     return;
   }
 
-  console.log('✍️  日本語に要約中...');
-  const summarized = await summarizeNews(filtered);
-  console.log(`   ${summarized.length} 件を要約完了`);
+  console.log('✍️  関連度スコアリング・日本語要約中...');
+  const summarized = await summarizeNews(candidates);
+  console.log(`   関連度7以上: ${summarized.length} 件を採用`);
 
-  console.log('📲 LINEに送信中...');
+  if (summarized.length === 0) {
+    console.log('⚠️  関連度の高い記事がありませんでした');
+    return;
+  }
+
+  console.log('📲 LINEにブロードキャスト送信中...');
   const msgCount = await sendToLine(summarized);
   console.log(`✅ 完了（${msgCount}件のメッセージを送信）`);
 }
