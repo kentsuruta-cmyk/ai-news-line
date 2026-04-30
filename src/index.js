@@ -9,6 +9,7 @@ const COUNTRY_LIMITS = {
   '🇨🇳 CN': 8,
   '🇬🇧 UK': 5,
   '🇩🇪 DE': 3,
+  '🇯🇵 JP': 8,
 };
 
 const RSS_FEEDS = [
@@ -18,6 +19,8 @@ const RSS_FEEDS = [
   { url: 'https://rss.dw.com/rdf/rss-en-tech', country: '🇩🇪 DE', lang: 'en' },
   { url: 'https://36kr.com/feed', country: '🇨🇳 CN', lang: 'zh' },
   { url: 'https://www.huxiu.com/rss/0.rss', country: '🇨🇳 CN', lang: 'zh' },
+  { url: 'https://rss.itmedia.co.jp/rss/2.0/aiplus.xml', country: '🇯🇵 JP', lang: 'ja' },
+  { url: 'https://japan.zdnet.com/rss/news/', country: '🇯🇵 JP', lang: 'ja' },
 ];
 
 const AI_KEYWORDS_EN = [
@@ -31,6 +34,12 @@ const AI_KEYWORDS_ZH = [
   'ai', '人工智能', '机器学习', '大模型', '生成式', '神经网络', 'openai',
   'chatgpt', '自动化', '大语言', '智能体', '语言模型', 'deepseek', 'llm',
   '算法', '训练', '推理', '科技', '智能', '机器人',
+];
+
+const AI_KEYWORDS_JA = [
+  'ai', '人工知能', '機械学習', '生成ai', 'llm', '大規模言語モデル', 'openai',
+  'chatgpt', 'claude', 'gemini', 'deepseek', '深層学習', 'ニューラル',
+  '自動化', 'ロボット', 'テクノロジー', 'アルゴリズム', '推論', 'anthropic',
 ];
 
 async function fetchAllNews() {
@@ -66,7 +75,7 @@ function selectCandidates(items) {
   const filtered = items.filter(item => {
     if (item.pubDate < cutoff) return false;
     const text = `${item.title} ${item.snippet}`.toLowerCase();
-    const keywords = item.lang === 'zh' ? AI_KEYWORDS_ZH : AI_KEYWORDS_EN;
+    const keywords = item.lang === 'zh' ? AI_KEYWORDS_ZH : item.lang === 'ja' ? AI_KEYWORDS_JA : AI_KEYWORDS_EN;
     return keywords.some(kw => text.includes(kw));
   });
 
@@ -113,6 +122,11 @@ async function summarizeNews(items) {
 2. 「中国語記事・要翻訳」と書かれた記事は中国語から日本語に翻訳してタイトルと要約を作成する
 3. 採用した記事を1〜2文の日本語で簡潔に要約する
 4. スコアが7未満の記事は結果に含めない（件数が減っても構わない）
+
+【中国語記事の翻訳ルール】
+- 固有名詞・会社名・製品名はそのまま維持する（例：DeepSeek、百度、Huawei、阿里巴巴、腾讯）
+- それ以外の中国語漢字表記は全て自然な日本語に変換する
+- 主な変換例：人工智能→AI、大模型→大規模AIモデル、智能体→AIエージェント、机器学习→機械学習、神经网络→ニューラルネットワーク、生成式→生成系、自动化→自動化、语言模型→言語モデル、训练→学習・トレーニング、推理→推論、算法→アルゴリズム
 
 【返却フォーマット（JSONのみ・コードブロック不要）】
 [
@@ -216,7 +230,7 @@ async function main() {
   console.log(`   合計 ${allItems.length} 件取得`);
 
   const candidates = selectCandidates(allItems);
-  console.log(`🔍 候補 ${candidates.length} 件（US≤8, CN≤8, UK≤5, DE≤3）`);
+  console.log(`🔍 候補 ${candidates.length} 件（US≤8, CN≤8, UK≤5, DE≤3, JP≤8）`);
 
   if (candidates.length === 0) {
     console.log('⚠️  対象ニュースが見つかりませんでした');
